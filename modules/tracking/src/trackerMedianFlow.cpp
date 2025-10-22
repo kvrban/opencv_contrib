@@ -94,6 +94,8 @@ private:
                    const std::vector<Point2f>& oldPoints,const std::vector<Point2f>& newPoints,std::vector<bool>& status);
 
     TrackerMedianFlow::Params params;
+    std::vector<Mat> cachedNewImagePyr;
+    bool hasCachedPyramid = false;
 };
 
 static
@@ -145,6 +147,7 @@ void TrackerMedianFlowImpl::write( cv::FileStorage& fs ) const
 
 bool TrackerMedianFlowImpl::initImpl( const Mat& image, const Rect2d& boundingBox ){
     model=Ptr<TrackerMedianFlowModel>(new TrackerMedianFlowModel(params));
+    hasCachedPyramid = false; // Reset cache on init
     ((TrackerMedianFlowModel*)static_cast<TrackerModel*>(model))->setImage(image);
     ((TrackerMedianFlowModel*)static_cast<TrackerModel*>(model))->setBoudingBox(boundingBox);
     return true;
@@ -223,7 +226,13 @@ bool TrackerMedianFlowImpl::medianFlowImpl(Mat oldImage,Mat newImage,Rect2d& old
     std::vector<float> errors(pointsToTrackOld.size());
 
     std::vector<Mat> oldImagePyr;
-    buildOpticalFlowPyramid(oldImage_gray, oldImagePyr, params.winSize, params.maxLevel, false);
+
+    // Reuse last frame's new pyramid as current frame's old pyramid
+    if (hasCachedPyramid) {
+        oldImagePyr = std::move(cachedNewImagePyr);
+    } else {
+        buildOpticalFlowPyramid(oldImage_gray, oldImagePyr, params.winSize, params.maxLevel, false);
+    }
 
     std::vector<Mat> newImagePyr;
     buildOpticalFlowPyramid(newImage_gray, newImagePyr, params.winSize, params.maxLevel, false);
@@ -251,6 +260,10 @@ bool TrackerMedianFlowImpl::medianFlowImpl(Mat oldImage,Mat newImage,Rect2d& old
     std::vector<bool> filter_status(pointsToTrackOld.size(), true);
     check_FB(oldImagePyr, newImagePyr, pointsToTrackOld, pointsToTrackNew, filter_status);
     check_NCC(oldImage_gray, newImage_gray, pointsToTrackOld, pointsToTrackNew, filter_status);
+
+    // After the last use of newImagePyr, we cache it for next frame
+    cachedNewImagePyr = std::move(newImagePyr);
+    hasCachedPyramid = true;
 
     // filter
     size_t num_good_points_after_filtering = filterPointsInVectors(filter_status, pointsToTrackOld, pointsToTrackNew, true);
